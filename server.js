@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-
 import contactRoutes from "./routes/contact.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -16,32 +15,20 @@ const app = express();
    MIDDLEWARE
 ========================================================= */
 
-app.use(
-  cors({
-    origin: "*",
-    credentials: true,
-  })
-);
+const corsOptions = {
+  origin: process.env.CLIENT_URL || true,
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* =========================================================
-   ROUTES
-========================================================= */
-
 app.use("/api/payments", paymentRoutes);
-
 app.use("/api/contact", contactRoutes);
-
 app.use("/api/reports", reportRoutes);
-
 app.use("/api/notifications", notificationRoutes);
-
-
-/* =========================================================
-   HEALTH CHECK
-========================================================= */
 
 app.get("/", (req, res) => {
   res.status(200).json({
@@ -50,15 +37,7 @@ app.get("/", (req, res) => {
   });
 });
 
-/* =========================================================
-   404 HANDLER
-========================================================= */
-
 app.use(errorHandler);
-
-/* =========================================================
-   ERROR HANDLER
-========================================================= */
 
 app.use((err, req, res, next) => {
   console.log(err);
@@ -68,10 +47,6 @@ app.use((err, req, res, next) => {
     error: err.message || "Server Error",
   });
 });
-
-/* =========================================================
-   SERVER
-========================================================= */
 
 const PORT = process.env.PORT || 5000;
 
