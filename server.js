@@ -6,6 +6,7 @@ import paymentRoutes from "./routes/paymentRoutes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import reportRoutes from "./routes/report.js";
 import notificationRoutes from "./routes/notifications.js";
+import mediaCleanupRoutes from "./routes/mediaCleanup.js";
 
 dotenv.config();
 
@@ -19,8 +20,8 @@ const allowedOrigins = [
   process.env.CLIENT_URL,
   "http://localhost:5173",
   "http://127.0.0.1:5173",
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
+  "https://unihelp-testing.vercel.app",
+  "https://unihelp-testing.vercel.app/",
 ].filter(Boolean);
 
 const corsOptions = {
@@ -44,6 +45,7 @@ app.use("/api/payments", paymentRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/notifications", notificationRoutes);
+app.use("/api/media-cleanup", mediaCleanupRoutes);
 
 app.get("/", (req, res) => {
   res.status(200).json({
