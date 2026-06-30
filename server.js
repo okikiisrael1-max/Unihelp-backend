@@ -5,7 +5,7 @@ import contactRoutes from "./routes/contact.js";
 import paymentRoutes from "./routes/paymentRoutes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import reportRoutes from "./routes/report.js";
-import notificationRoutes from "./routes/notifications.js";
+import notificationRoutes, { sendStudyReminderNotifications } from "./routes/notifications.js";
 import mediaCleanupRoutes from "./routes/mediaCleanup.js";
 
 dotenv.config();
@@ -72,3 +72,9 @@ app.listen(PORT, () => {
     `🚀 Server running on port ${PORT}`
   );
 });
+
+setInterval(() => {
+  sendStudyReminderNotifications().catch((error) => {
+    console.error("Reminder scheduler failed:", error);
+  });
+}, 15 * 60 * 1000);

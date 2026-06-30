@@ -3,11 +3,19 @@ import nodemailer from "nodemailer";
 
 const router = express.Router();
 
-router.post("/report", async (req, res) => {
+const escapeHtml = (value = "") =>
+  String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+
+const handleReport = async (req, res) => {
   try {
     const { category, reportedUser, details } = req.body;
 
-    if (!category || !details) {
+    if (!category?.trim() || !details?.trim()) {
       return res.status(400).json({
         message: "Please fill all required fields",
       });
@@ -27,20 +35,20 @@ router.post("/report", async (req, res) => {
 
       to: process.env.RECEIVER_EMAIL,
 
-      subject: `New Report - ${category}`,
+      subject: `New Report - ${category.trim()}`,
 
       html: `
         <h2>New User Report</h2>
 
-        <p><strong>Category:</strong> ${category}</p>
+        <p><strong>Category:</strong> ${escapeHtml(category.trim())}</p>
 
         <p><strong>Reported User:</strong> ${
-          reportedUser || "Not provided"
+          escapeHtml(reportedUser?.trim() || "Not provided")
         }</p>
 
         <p><strong>Details:</strong></p>
 
-        <p>${details}</p>
+        <p>${escapeHtml(details.trim()).replace(/\n/g, "<br />")}</p>
       `,
     });
 
@@ -55,6 +63,9 @@ router.post("/report", async (req, res) => {
       message: "Server Error",
     });
   }
-});
+};
+
+router.post("/", handleReport);
+router.post("/report", handleReport);
 
 export default router;
