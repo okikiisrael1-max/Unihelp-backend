@@ -7,6 +7,7 @@ import { errorHandler } from "./middleware/errorHandler.js";
 import reportRoutes from "./routes/report.js";
 import notificationRoutes, { sendStudyReminderNotifications } from "./routes/notifications.js";
 import mediaCleanupRoutes from "./routes/mediaCleanup.js";
+import aiRoutes from "./routes/aiRoutes.js";
 
 dotenv.config();
 
@@ -46,6 +47,7 @@ app.use("/api/contact", contactRoutes);
 app.use("/api/reports", reportRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/media-cleanup", mediaCleanupRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.get("/", (req, res) => {
   res.status(200).json({
