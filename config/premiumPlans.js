@@ -2,8 +2,8 @@ export const PREMIUM_PLANS = {
   "student-premium": {
     id: "student-premium",
     name: "Student Premium",
-    monthly: 600,
-    yearly: 6000,
+    monthly: 1000,
+    yearly: 10000,
   },
 };
 
