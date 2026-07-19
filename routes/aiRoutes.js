@@ -15,7 +15,12 @@ const resolveModels = () => {
   return configuredModels.length ? configuredModels : DEFAULT_MODELS;
 };
 
-const buildStudyPrompt = (prompt, profile = {}) => `
+const buildStudyPrompt = (prompt, profile = {}, attachment = {}) => {
+  const attachmentText = attachment?.name
+    ? `\nUser attached a file: ${attachment.name}${attachment?.mimeType ? ` (${attachment.mimeType})` : ""}${attachment?.url ? `\nFile URL: ${attachment.url}` : ""}`
+    : "";
+
+  return `
 You are Unihelp AI, a concise academic assistant for Nigerian students.
 Give practical study help, clear explanations, examples, and revision steps.
 Do not invent facts. If a question needs current school-specific information, say what to verify.
@@ -26,8 +31,9 @@ Student context:
 - Premium: ${profile.premium ? "yes" : "no"}
 
 Student request:
-${prompt}
+${prompt}${attachmentText}
 `;
+};
 
 const buildFallbackAnswer = (prompt, profile = {}) => {
   const topic = String(prompt || "your study topic").trim().slice(0, 120) || "your study topic";
@@ -36,13 +42,24 @@ const buildFallbackAnswer = (prompt, profile = {}) => {
   return `I can help with ${topic}.\n\nTry this approach:\n1. Break the topic into the main concepts.\n2. Write one short example for each concept.\n3. Test yourself with 3 quick questions.\n4. Review the weak areas and repeat the process.\n\n${premiumHint}`;
 };
 
-const callGemini = async (geminiApiKey, prompt, profile) => {
+const callGemini = async (geminiApiKey, prompt, profile, attachment = {}) => {
   const models = resolveModels();
+  const parts = [{ text: buildStudyPrompt(prompt, profile, attachment) }];
+
+  if (attachment?.mimeType?.startsWith("image/") && attachment?.base64) {
+    parts.push({
+      inlineData: {
+        mimeType: attachment.mimeType,
+        data: attachment.base64,
+      },
+    });
+  }
+
   const payload = {
     contents: [
       {
         role: "user",
-        parts: [{ text: buildStudyPrompt(prompt, profile) }],
+        parts,
       },
     ],
     generationConfig: {
@@ -82,6 +99,7 @@ router.post("/study", async (req, res) => {
   try {
     const prompt = String(req.body?.prompt || "").trim();
     const profile = req.body?.profile || {};
+    const attachment = req.body?.attachment || {};
 
     if (!prompt) {
       return res.status(400).json({ success: false, error: "Prompt is required" });
@@ -106,7 +124,7 @@ router.post("/study", async (req, res) => {
     let answer = "";
 
     try {
-      const response = await callGemini(geminiApiKey, prompt, profile);
+      const response = await callGemini(geminiApiKey, prompt, profile, attachment);
       answer =
         response.data?.candidates?.[0]?.content?.parts
           ?.map((part) => part.text)
