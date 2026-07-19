@@ -1,6 +1,8 @@
 import express from "express";
 
+import { authenticateFirebaseUser } from "../middleware/auth.js";
 import { admin, db, messaging } from "../firebase/firebaseAdmin.js";
+import { sendNotification } from "../utils/expoPush.js";
 
 const router = express.Router();
 
@@ -159,6 +161,37 @@ export const sendStudyReminderNotifications = async () => {
   }
 };
 
+router.post("/push-token", authenticateFirebaseUser, async (req, res) => {
+  try {
+    const { expoPushToken, deviceType = "unknown" } = req.body || {};
+
+    if (!expoPushToken) {
+      return res.status(400).json({
+        success: false,
+        message: "An Expo push token is required.",
+      });
+    }
+
+    await db.collection("users").doc(req.user.uid).set(
+      {
+        expoPushToken,
+        pushNotificationsEnabled: true,
+        pushTokenUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        deviceType,
+      },
+      { merge: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Push token saved.",
+    });
+  } catch (error) {
+    console.error("Push token update failed:", error);
+    return res.status(500).json({ success: false, message: "Failed to save push token." });
+  }
+});
+
 router.post("/send-user", async (req, res) => {
   try {
     const {
@@ -190,9 +223,13 @@ router.post("/send-user", async (req, res) => {
         user.notificationsEnabled !== false &&
         user.notifications?.enabled !== false;
 
-      if (!notificationsEnabled || !user.fcmToken) continue;
+      if (!notificationsEnabled) continue;
 
-      recipients.push({ userId: uid, token: user.fcmToken });
+      if (user.expoPushToken) {
+        recipients.push({ userId: uid, token: user.expoPushToken, pushType: "expo" });
+      } else if (user.fcmToken) {
+        recipients.push({ userId: uid, token: user.fcmToken, pushType: "fcm" });
+      }
     }
 
     if (recipients.length === 0) {
@@ -209,34 +246,53 @@ router.post("/send-user", async (req, res) => {
     });
 
     let sent = 0;
+    const expoRecipients = recipients.filter((item) => item.pushType === "expo");
+    const legacyRecipients = recipients.filter((item) => item.pushType !== "expo");
 
-    for (const batch of chunkArray(recipients, 500)) {
-      const response = await messaging.sendEachForMulticast({
-        ...payload,
-        tokens: batch.map((item) => item.token),
-      });
-
-      sent += response.successCount || 0;
-
-      const batchWrite = db.batch();
-
-      batch.forEach((recipient) => {
-        const notificationRef = db.collection("notifications").doc();
-        batchWrite.set(notificationRef, {
-          userId: recipient.userId,
-          title,
-          message: body,
-          category,
+    if (expoRecipients.length > 0) {
+      const expoResult = await sendNotification({
+        recipients: expoRecipients.map((item) => item.token),
+        title,
+        body,
+        data: {
           type,
+          category,
+          announcementId: announcementId || "",
           url,
-          announcementId,
-          read: false,
-          createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
+        },
       });
-
-      await batchWrite.commit();
+      sent += expoResult.sent || 0;
     }
+
+    if (legacyRecipients.length > 0) {
+      for (const batch of chunkArray(legacyRecipients, 500)) {
+        const response = await messaging.sendEachForMulticast({
+          ...payload,
+          tokens: batch.map((item) => item.token),
+        });
+
+        sent += response.successCount || 0;
+      }
+    }
+
+    const batchWrite = db.batch();
+
+    recipients.forEach((recipient) => {
+      const notificationRef = db.collection("notifications").doc();
+      batchWrite.set(notificationRef, {
+        userId: recipient.userId,
+        title,
+        message: body,
+        category,
+        type,
+        url,
+        announcementId,
+        read: false,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    await batchWrite.commit();
 
     return res.status(200).json({ success: true, sent, recipients: recipients.length });
   } catch (error) {
@@ -268,7 +324,6 @@ router.post("/broadcast", async (req, res) => {
 
     usersSnap.forEach((doc) => {
       const user = doc.data() || {};
-      const token = user.fcmToken;
       const notificationsEnabled =
         user.notificationsEnabled !== false &&
         user.notifications?.enabled !== false;
@@ -279,15 +334,21 @@ router.post("/broadcast", async (req, res) => {
         userId: doc.id,
       });
 
-      if (!token) return;
-
-      recipients.push({
-        userId: doc.id,
-        token,
-      });
+      if (user.expoPushToken) {
+        recipients.push({
+          userId: doc.id,
+          token: user.expoPushToken,
+          pushType: "expo",
+        });
+      } else if (user.fcmToken) {
+        recipients.push({
+          userId: doc.id,
+          token: user.fcmToken,
+          pushType: "fcm",
+        });
+      }
     });
 
-    const recipientTokens = [...new Set(recipients.map((item) => item.token))];
     const message = buildMessagePayload({
       title,
       body,
@@ -299,7 +360,26 @@ router.post("/broadcast", async (req, res) => {
 
     let sent = 0;
 
-    if (recipientTokens.length > 0) {
+    const expoRecipients = recipients.filter((item) => item.pushType === "expo");
+    const legacyRecipients = recipients.filter((item) => item.pushType !== "expo");
+
+    if (expoRecipients.length > 0) {
+      const expoResult = await sendNotification({
+        recipients: expoRecipients.map((item) => item.token),
+        title,
+        body,
+        data: {
+          type: "announcement",
+          category,
+          announcementId: announcementId || "",
+          url,
+        },
+      });
+      sent += expoResult.sent || 0;
+    }
+
+    if (legacyRecipients.length > 0) {
+      const recipientTokens = [...new Set(legacyRecipients.map((item) => item.token))];
       for (const tokenChunk of chunkArray(recipientTokens, 500)) {
         const response = await messaging.sendEachForMulticast({
           ...message,
