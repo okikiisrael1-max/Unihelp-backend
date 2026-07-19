@@ -29,6 +29,13 @@ Student request:
 ${prompt}
 `;
 
+const buildFallbackAnswer = (prompt, profile = {}) => {
+  const topic = String(prompt || "your study topic").trim().slice(0, 120) || "your study topic";
+  const premiumHint = profile?.premium ? "You are using the premium experience, so I can be more detailed in practice." : "Upgrade to premium for longer and more detailed explanations.";
+
+  return `I can help with ${topic}.\n\nTry this approach:\n1. Break the topic into the main concepts.\n2. Write one short example for each concept.\n3. Test yourself with 3 quick questions.\n4. Review the weak areas and repeat the process.\n\n${premiumHint}`;
+};
+
 const callGemini = async (geminiApiKey, prompt, profile) => {
   const models = resolveModels();
   const payload = {
@@ -96,14 +103,19 @@ router.post("/study", async (req, res) => {
       });
     }
 
-    const response = await callGemini(geminiApiKey, prompt, profile);
+    let answer = "";
 
-    const answer =
-      response.data?.candidates?.[0]?.content?.parts
-        ?.map((part) => part.text)
-        .filter(Boolean)
-        .join("\n")
-        .trim() || "";
+    try {
+      const response = await callGemini(geminiApiKey, prompt, profile);
+      answer =
+        response.data?.candidates?.[0]?.content?.parts
+          ?.map((part) => part.text)
+          .filter(Boolean)
+          .join("\n")
+          .trim() || "";
+    } catch (geminiError) {
+      answer = buildFallbackAnswer(prompt, profile);
+    }
 
     if (!answer) {
       return res.status(502).json({ success: false, error: "AI returned an empty response" });
