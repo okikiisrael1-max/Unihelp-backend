@@ -1,103 +1,95 @@
 import express from 'express';
-import { db } from '../firebase/firebaseAdmin.js';
 import { authenticateFirebaseUser } from '../middleware/auth.js';
+import { processAiChat } from '../services/aiService.js';
+import { getAiUsageStatus, consumeAiUsage } from '../services/aiUsageService.js';
 
 const router = express.Router();
 
-const createPrompt = ({ tool, input, profile = {} }) => `
-You are Unihelp AI, the central study assistant for a student app.
-You must never mention database internals or claim to access Firestore directly.
-You can help with study, recommendations, and app-specific guidance.
-
-User profile:
-- Name: ${profile.username || profile.displayName || 'Student'}
-- Role: ${profile.role || 'student'}
-- Premium: ${profile.premium ? 'yes' : 'no'}
-
-Tool: ${tool}
-Input: ${JSON.stringify(input || {}, null, 2)}
-
-Return a concise, practical response in JSON with fields:
-{
-  "summary": "...",
-  "items": [],
-  "recommendations": []
-}
-`;
-
-const buildToolResponse = (tool, input, profile = {}) => {
-  const fallback = {
-    summary: `I can help with ${tool} for ${profile.username || 'you'} right away.`,
-    items: [],
-    recommendations: [],
-  };
-
-  switch (tool) {
-    case 'summarize_notes':
-      return {
-        ...fallback,
-        summary: `Here is a quick summary for the selected notes: ${input?.title || 'your notes'}.`,
-        items: [{ title: 'Key idea', description: 'Focus on the main concept, supporting evidence, and the ending takeaway.' }],
-      };
-    case 'explain_topic':
-      return {
-        ...fallback,
-        summary: `A simple explanation for ${input?.topic || 'this topic'}: break it into definition, example, and application.`,
-      };
-    case 'generate_quiz':
-      return {
-        ...fallback,
-        summary: 'Here is a short quiz structure you can use to test your understanding.',
-        items: [
-          { title: 'Question 1', description: 'What is the main idea behind this topic?' },
-          { title: 'Question 2', description: 'How would you apply it in practice?' },
-        ],
-      };
-    case 'generate_flashcards':
-      return {
-        ...fallback,
-        summary: 'Create flashcards around the core terms and definitions.',
-        items: [{ title: 'Term', description: 'Definition' }],
-      };
-    case 'recommend_tutorials':
-      return {
-        ...fallback,
-        summary: 'I recommend a short tutorial sequence tailored to your current topic.',
-        recommendations: [{ title: 'Start with the basics', description: 'Build confidence before moving to advanced practice.' }],
-      };
-    case 'marketplace_insight':
-      return {
-        ...fallback,
-        summary: 'I can help compare marketplace listings by price, condition, and urgency.',
-        recommendations: [{ title: 'Compare options', description: 'Check pricing, condition, and delivery details.' }],
-      };
-    case 'hostel_recommendation':
-      return {
-        ...fallback,
-        summary: 'I can help shortlist hostel options based on budget, safety, and commute.',
-        recommendations: [{ title: 'Shortlist hostels', description: 'Match the best options to your budget and campus needs.' }],
-      };
-    case 'announcements_digest':
-      return {
-        ...fallback,
-        summary: 'I can summarize the latest announcements into priorities and deadlines.',
-      };
-    default:
-      return fallback;
-  }
-};
+/* =========================================================
+   POST /api/ai/tool
+   Execute a specific AI tool with real Gemini function calling.
+   Used by AI widgets embedded in pages.
+========================================================= */
 
 router.post('/tool', authenticateFirebaseUser, async (req, res) => {
   try {
     const { tool, input = {}, profile = {} } = req.body || {};
+    const user = req.user || {};
+
     if (!tool) {
       return res.status(400).json({ success: false, error: 'Tool is required' });
     }
 
-    const response = buildToolResponse(tool, input, profile);
-    return res.status(200).json({ success: true, ...response });
+    const uid = user.uid || profile?.uid || profile?.id;
+    const isPremium = Boolean(profile?.premium);
+
+    // Check usage
+    const usageCheck = await getAiUsageStatus(uid, isPremium);
+    if (!usageCheck.allowed) {
+      return res.status(429).json({
+        success: false,
+        error: `You have reached your AI limit for today (${usageCheck.used}/${usageCheck.limit}).`,
+        usage: usageCheck,
+      });
+    }
+
+    // Map tool name to a natural language prompt for Gemini
+    const toolPrompts = {
+      summarize_notes: `Summarize the latest lecture notes. ${input?.title ? `Focus on: ${input.title}` : ''}`,
+      explain_topic: `Explain "${input?.topic || 'this topic'}" simply with examples. Level: ${input?.level || 'beginner'}.`,
+      generate_quiz: `Generate ${input?.count || 5} quiz questions about "${input?.topic || 'this topic'}" with answers.`,
+      generate_flashcards: `Create ${input?.count || 5} flashcards for "${input?.topic || 'this topic'}" with term and definition.`,
+      recommend_tutorials: `Recommend a learning path for "${input?.subject || 'this subject'}". Goal: ${input?.goal || 'general'}.`,
+      announcements_digest: `Summarize the latest announcements into key points and priorities.`,
+      marketplace_insight: `Analyze marketplace listings. ${input?.query ? `Query: ${input.query}` : ''}${input?.category ? ` Category: ${input.category}` : ''}`,
+      hostel_recommendation: `Recommend hostels. ${input?.budget ? `Budget: ₦${input.budget}` : ''}${input?.location ? ` Location: ${input.location}` : ''}`,
+    };
+
+    const prompt = toolPrompts[tool] || `Help with ${tool}: ${JSON.stringify(input)}`;
+
+    const result = await processAiChat({
+      prompt,
+      profile: { ...profile, uid },
+      attachment: null,
+      history: [],
+    });
+
+    // Consume usage
+    const updatedUsage = await consumeAiUsage(uid, isPremium);
+
+    // Parse the response for structured data
+    let summary = result.answer;
+    let items = [];
+    let recommendations = [];
+
+    // Try to extract structured data from the response
+    try {
+      // Check if the response contains JSON
+      const jsonMatch = result.answer.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        const parsed = JSON.parse(jsonMatch[0]);
+        summary = parsed.summary || parsed.answer || summary;
+        items = parsed.items || [];
+        recommendations = parsed.recommendations || [];
+      }
+    } catch {
+      // Not JSON, use the text as-is
+    }
+
+    return res.status(200).json({
+      success: true,
+      summary,
+      items,
+      recommendations,
+      toolResults: result.toolResults || [],
+      usage: updatedUsage,
+    });
   } catch (error) {
-    return res.status(500).json({ success: false, error: error.message || 'AI tool request failed' });
+    console.error('[aiTools] Tool request failed:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'AI tool request failed.',
+    });
   }
 });
 

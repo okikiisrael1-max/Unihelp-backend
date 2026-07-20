@@ -1,108 +1,26 @@
-import express from "express";
-import axios from "axios";
+import express from 'express';
+import { authenticateFirebaseUser } from '../middleware/auth.js';
+import { processAiChat, processStudyQuery } from '../services/aiService.js';
+import { getAiUsageStatus, consumeAiUsage } from '../services/aiUsageService.js';
 
 const router = express.Router();
 
 const MAX_PROMPT_LENGTH = 6000;
-const DEFAULT_MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash", "gemini-1.5-flash-latest", "gemini-1.5-pro"];
 
-const resolveModels = () => {
-  const configuredModels = String(process.env.GEMINI_MODEL || process.env.GEMINI_MODELS || "")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
+/* =========================================================
+   POST /api/ai/chat
+   Unified AI chat endpoint with tool calling support.
+   All AI requests go through here.
+========================================================= */
 
-  return configuredModels.length ? configuredModels : DEFAULT_MODELS;
-};
-
-const buildStudyPrompt = (prompt, profile = {}, attachment = {}) => {
-  const attachmentText = attachment?.name
-    ? `\nUser attached a file: ${attachment.name}${attachment?.mimeType ? ` (${attachment.mimeType})` : ""}${attachment?.url ? `\nFile URL: ${attachment.url}` : ""}`
-    : "";
-
-  return `
-You are Unihelp AI, a concise academic assistant for Nigerian students.
-Give practical study help, clear explanations, examples, and revision steps.
-Do not invent facts. If a question needs current school-specific information, say what to verify.
-
-Student context:
-- Name: ${profile.username || profile.displayName || "Student"}
-- Role: ${profile.role || "student"}
-- Premium: ${profile.premium ? "yes" : "no"}
-
-Student request:
-${prompt}${attachmentText}
-`;
-};
-
-const buildFallbackAnswer = (prompt, profile = {}) => {
-  const topic = String(prompt || "your study topic").trim().slice(0, 120) || "your study topic";
-  const premiumHint = profile?.premium ? "You are using the premium experience, so I can be more detailed in practice." : "Upgrade to premium for longer and more detailed explanations.";
-
-  return `I can help with ${topic}.\n\nTry this approach:\n1. Break the topic into the main concepts.\n2. Write one short example for each concept.\n3. Test yourself with 3 quick questions.\n4. Review the weak areas and repeat the process.\n\n${premiumHint}`;
-};
-
-const callGemini = async (geminiApiKey, prompt, profile, attachment = {}) => {
-  const models = resolveModels();
-  const parts = [{ text: buildStudyPrompt(prompt, profile, attachment) }];
-
-  if (attachment?.mimeType?.startsWith("image/") && attachment?.base64) {
-    parts.push({
-      inlineData: {
-        mimeType: attachment.mimeType,
-        data: attachment.base64,
-      },
-    });
-  }
-
-  const payload = {
-    contents: [
-      {
-        role: "user",
-        parts,
-      },
-    ],
-    generationConfig: {
-      temperature: 0.4,
-      topP: 0.9,
-      maxOutputTokens: profile?.premium ? 1400 : 700,
-    },
-  };
-
-  let lastError;
-
-  for (const version of ["v1", "v1beta"]) {
-    for (const modelName of models) {
-      try {
-        return await axios.post(
-          `https://generativelanguage.googleapis.com/${version}/models/${modelName}:generateContent?key=${geminiApiKey}`,
-          payload,
-          { timeout: 30000 }
-        );
-      } catch (error) {
-        const status = error.response?.status;
-        const message = error.response?.data?.error?.message || error.message || "";
-
-        if (status === 400 && /API key not valid|API_KEY_INVALID|invalid API key|INVALID_ARGUMENT/i.test(message)) {
-          throw error;
-        }
-
-        lastError = error;
-      }
-    }
-  }
-
-  throw lastError || new Error("AI request failed.");
-};
-
-router.post("/study", async (req, res) => {
+router.post('/chat', authenticateFirebaseUser, async (req, res) => {
   try {
-    const prompt = String(req.body?.prompt || "").trim();
+    const { prompt, attachment = null, history = [] } = req.body || {};
+    const user = req.user || {};
     const profile = req.body?.profile || {};
-    const attachment = req.body?.attachment || {};
 
-    if (!prompt) {
-      return res.status(400).json({ success: false, error: "Prompt is required" });
+    if (!prompt?.trim()) {
+      return res.status(400).json({ success: false, error: 'Prompt is required' });
     }
 
     if (prompt.length > MAX_PROMPT_LENGTH) {
@@ -112,46 +30,111 @@ router.post("/study", async (req, res) => {
       });
     }
 
-    const geminiApiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
+    // Check and consume usage
+    const uid = user.uid || profile?.uid || profile?.id;
+    const isPremium = Boolean(profile?.premium);
 
-    if (!geminiApiKey) {
-      return res.status(503).json({
+    const usageCheck = await getAiUsageStatus(uid, isPremium);
+    if (!usageCheck.allowed) {
+      return res.status(429).json({
         success: false,
-        error: "AI service is not configured. Set GEMINI_API_KEY on the backend.",
+        error: `You have reached your AI limit for today (${usageCheck.used}/${usageCheck.limit}). ${isPremium ? '' : 'Upgrade to Premium for more messages.'}`,
+        usage: usageCheck,
       });
     }
 
-    let answer = "";
+    const result = await processAiChat({ prompt, profile: { ...profile, uid }, attachment, history });
 
-    try {
-      const response = await callGemini(geminiApiKey, prompt, profile, attachment);
-      answer =
-        response.data?.candidates?.[0]?.content?.parts
-          ?.map((part) => part.text)
-          .filter(Boolean)
-          .join("\n")
-          .trim() || "";
-    } catch (geminiError) {
-      answer = buildFallbackAnswer(prompt, profile);
-    }
+    // Consume usage after successful AI call
+    const updatedUsage = await consumeAiUsage(uid, isPremium);
 
-    if (!answer) {
-      return res.status(502).json({ success: false, error: "AI returned an empty response" });
-    }
-
-    return res.status(200).json({ success: true, answer });
+    return res.status(200).json({
+      success: true,
+      answer: result.answer,
+      toolResults: result.toolResults || [],
+      usage: updatedUsage,
+    });
   } catch (error) {
-    console.error("AI study request failed:", error.response?.data || error.message);
-
-    const message = error.response?.data?.error?.message || error.message || "AI request failed. Please try again.";
-    const friendlyError =
-      /API key not valid|API_KEY_INVALID|invalid API key/i.test(message)
-        ? "The Gemini API key configured on the server is invalid or inactive. Please update GEMINI_API_KEY."
-        : message;
-
+    console.error('[aiRoutes] Chat failed:', error.message);
     return res.status(500).json({
       success: false,
-      error: friendlyError,
+      error: error.message || 'AI request failed. Please try again.',
+    });
+  }
+});
+
+/* =========================================================
+   POST /api/ai/study
+   Legacy simple study query (no tool calling).
+   Kept for backward compatibility.
+========================================================= */
+
+router.post('/study', authenticateFirebaseUser, async (req, res) => {
+  try {
+    const prompt = String(req.body?.prompt || '').trim();
+    const profile = req.body?.profile || {};
+    const attachment = req.body?.attachment || {};
+    const user = req.user || {};
+
+    if (!prompt) {
+      return res.status(400).json({ success: false, error: 'Prompt is required' });
+    }
+
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({
+        success: false,
+        error: `Prompt is too long. Keep it under ${MAX_PROMPT_LENGTH} characters.`,
+      });
+    }
+
+    const uid = user.uid || profile?.uid || profile?.id;
+    const isPremium = Boolean(profile?.premium);
+
+    const usageCheck = await getAiUsageStatus(uid, isPremium);
+    if (!usageCheck.allowed) {
+      return res.status(429).json({
+        success: false,
+        error: `You have reached your AI limit for today (${usageCheck.used}/${usageCheck.limit}).`,
+        usage: usageCheck,
+      });
+    }
+
+    const result = await processStudyQuery({ prompt, profile: { ...profile, uid }, attachment });
+    const updatedUsage = await consumeAiUsage(uid, isPremium);
+
+    return res.status(200).json({
+      success: true,
+      answer: result.answer,
+      usage: updatedUsage,
+    });
+  } catch (error) {
+    console.error('[aiRoutes] Study failed:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'AI request failed. Please try again.',
+    });
+  }
+});
+
+/* =========================================================
+   GET /api/ai/usage
+   Fetch current AI usage status.
+========================================================= */
+
+router.post('/usage', authenticateFirebaseUser, async (req, res) => {
+  try {
+    const user = req.user || {};
+    const profile = req.body?.profile || {};
+    const uid = user.uid || profile?.uid;
+    const isPremium = Boolean(profile?.premium);
+
+    const usage = await getAiUsageStatus(uid, isPremium);
+    return res.status(200).json({ success: true, usage });
+  } catch (error) {
+    console.error('[aiRoutes] Usage fetch failed:', error.message);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to fetch AI usage status.',
     });
   }
 });

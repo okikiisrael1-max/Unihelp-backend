@@ -51,8 +51,7 @@ const buildMessagePayload = ({
 export const sendStudyReminderNotifications = async () => {
   try {
     const now = new Date();
-    const inactiveSince = new Date(now.getTime() - 15 * 60 * 60 * 1000);
-    const inactiveSinceTimestamp = admin.firestore.Timestamp.fromDate(inactiveSince);
+    const inactiveSince = new Date(now.getTime() - 20 * 60 * 60 * 1000); // 20 hours
 
     const usersSnap = await db
       .collection("users")
@@ -120,9 +119,11 @@ export const sendStudyReminderNotifications = async () => {
           userId: recipient.userId,
           title: reminderPayload.notification.title,
           message: reminderPayload.notification.body,
+          body: reminderPayload.notification.body,
           category: "Reminder",
           type: "study-reminder",
-          url: "/",
+          url: "/notifications",
+          route: "/notifications",
           read: false,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
