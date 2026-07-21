@@ -62,6 +62,66 @@ const cleanupThenDelete = async ({ ref, data }) => {
 
 router.use(authenticateFirebaseUser);
 
+/* =========================================================
+   POST /api/media-cleanup/delete-assets
+   Delete specific Cloudinary assets by publicId or URL.
+   Used when updating profile photos, group photos, etc.
+   Body: { assets: [{ publicId, resourceType, url }] }
+   or:   { urls: [string] } — will extract publicId from each URL
+   or:   { publicIds: [string] } — will delete as images
+========================================================= */
+
+router.post("/delete-assets", async (req, res) => {
+  try {
+    const { assets: explicitAssets, urls, publicIds } = req.body || {};
+
+    let assets = [];
+
+    if (Array.isArray(explicitAssets) && explicitAssets.length > 0) {
+      assets = explicitAssets;
+    }
+
+    if (Array.isArray(urls) && urls.length > 0) {
+      urls.forEach((url) => {
+        if (typeof url === "string" && url.trim()) {
+          assets.push({ url: url.trim(), publicId: null, resourceType: "image" });
+        }
+      });
+    }
+
+    if (Array.isArray(publicIds) && publicIds.length > 0) {
+      publicIds.forEach((pid) => {
+        if (typeof pid === "string" && pid.trim()) {
+          assets.push({ publicId: pid.trim(), resourceType: "image" });
+        }
+      });
+    }
+
+    if (assets.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "No assets provided. Send assets, urls, or publicIds array.",
+      });
+    }
+
+    const cloudinaryResults = await deleteCloudinaryAssets(assets);
+
+    res.status(200).json({
+      success: true,
+      deletedAssets: cloudinaryResults.filter((item) => item.success).length,
+      skippedAssets: cloudinaryResults.filter((item) => item.skipped).length,
+      failedAssets: cloudinaryResults.filter((item) => item.success === false).length,
+      cloudinaryResults,
+    });
+  } catch (error) {
+    console.error("[cleanup] Delete assets failed", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Unable to delete Cloudinary assets",
+    });
+  }
+});
+
 router.delete("/documents/:type/:id", async (req, res) => {
   try {
     const config = DOCUMENT_TYPES[req.params.type];
