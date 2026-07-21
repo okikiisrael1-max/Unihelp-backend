@@ -1,58 +1,49 @@
 import express from "express";
-import nodemailer from "nodemailer";
+import { db } from "../firebase/firebaseAdmin.js";
 
 const router = express.Router();
 
-const escapeHtml = (value = "") =>
-  String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+const validateContactInput = ({ name, email, subject, message }) => {
+  const errors = [];
+  if (!name?.trim()) errors.push("Name is required");
+  if (!email?.trim()) errors.push("Email is required");
+  if (!subject?.trim()) errors.push("Subject is required");
+  if (!message?.trim()) errors.push("Message is required");
+  return errors;
+};
 
 const handleContact = async (req, res) => {
   try {
-    const { name, email, subject, message } = req.body;
+    const { name, email, phone, subject, message } = req.body;
 
-    if (!name?.trim() || !email?.trim() || !subject?.trim() || !message?.trim()) {
+    const errors = validateContactInput({ name, email, subject, message });
+    if (errors.length > 0) {
       return res.status(400).json({
-        message: "All fields are required",
+        message: errors.join(". "),
+        errors,
       });
     }
 
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
-
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
-
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-      replyTo: email.trim(),
-      to: process.env.RECEIVER_EMAIL,
+    const docData = {
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone?.trim() || "",
       subject: subject.trim(),
+      message: message.trim(),
+      userId: req.user?.uid || null,
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-      html: `
-        <h2>New Contact Message</h2>
+    const ref = await db.collection("contactMessages").add(docData);
 
-        <p><strong>Name:</strong> ${escapeHtml(name.trim())}</p>
-        <p><strong>Email:</strong> ${escapeHtml(email.trim())}</p>
-        <p><strong>Message:</strong></p>
-        <p>${escapeHtml(message.trim()).replace(/\n/g, "<br />")}</p>
-      `,
-    });
-
-    res.status(200).json({
+    res.status(201).json({
       message: "Message sent successfully",
+      id: ref.id,
     });
-
   } catch (error) {
-    console.log(error);
-
+    console.error("Contact submission error:", error);
     res.status(500).json({
       message: "Server Error",
     });

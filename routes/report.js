@@ -1,64 +1,52 @@
 import express from "express";
-import nodemailer from "nodemailer";
+import { db } from "../firebase/firebaseAdmin.js";
 
 const router = express.Router();
 
-const escapeHtml = (value = "") =>
-  String(value)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+const validateReportInput = ({ category, details }) => {
+  const errors = [];
+  if (!category?.trim()) errors.push("Category is required");
+  if (!details?.trim()) errors.push("Details are required");
+  return errors;
+};
 
 const handleReport = async (req, res) => {
   try {
-    const { category, reportedUser, details } = req.body;
+    const { category, reportedUser, details, reportType, title, description } = req.body;
 
-    if (!category?.trim() || !details?.trim()) {
+    const effectiveReportType = reportType || category;
+    const effectiveDescription = description || details;
+    const effectiveTitle = title || reportedUser || "";
+
+    const errors = validateReportInput({ category: effectiveReportType, details: effectiveDescription });
+    if (errors.length > 0) {
       return res.status(400).json({
-        message: "Please fill all required fields",
+        message: errors.join(". "),
+        errors,
       });
     }
 
-    const transporter = nodemailer.createTransport({
-      service: "gmail",
+    const docData = {
+      userId: req.user?.uid || null,
+      displayName: req.user?.displayName || req.user?.name || "",
+      email: req.user?.email || "",
+      reportType: effectiveReportType.trim(),
+      title: effectiveTitle.trim(),
+      description: effectiveDescription.trim(),
+      attachments: [],
+      status: "pending",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
 
-      auth: {
-        user: process.env.EMAIL_USER,
-        pass: process.env.EMAIL_PASS,
-      },
-    });
+    const ref = await db.collection("reports").add(docData);
 
-    await transporter.sendMail({
-      from: process.env.EMAIL_USER,
-
-      to: process.env.RECEIVER_EMAIL,
-
-      subject: `New Report - ${category.trim()}`,
-
-      html: `
-        <h2>New User Report</h2>
-
-        <p><strong>Category:</strong> ${escapeHtml(category.trim())}</p>
-
-        <p><strong>Reported User:</strong> ${
-          escapeHtml(reportedUser?.trim() || "Not provided")
-        }</p>
-
-        <p><strong>Details:</strong></p>
-
-        <p>${escapeHtml(details.trim()).replace(/\n/g, "<br />")}</p>
-      `,
-    });
-
-    res.status(200).json({
+    res.status(201).json({
       message: "Report submitted successfully",
+      id: ref.id,
     });
-
   } catch (error) {
-    console.log(error);
-
+    console.error("Report submission error:", error);
     res.status(500).json({
       message: "Server Error",
     });

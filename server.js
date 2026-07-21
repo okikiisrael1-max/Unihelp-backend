@@ -9,6 +9,7 @@ import notificationRoutes, { sendStudyReminderNotifications } from "./routes/not
 import mediaCleanupRoutes from "./routes/mediaCleanup.js";
 import aiRoutes from "./routes/aiRoutes.js";
 import aiToolsRoutes from "./routes/aiTools.js";
+import suggestionsRoutes from "./routes/suggestions.js";
 
 dotenv.config();
 
@@ -46,6 +47,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use("/api/payments", paymentRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/reports", reportRoutes);
+app.use("/api/suggestions", suggestionsRoutes);
 app.use("/api/notifications", notificationRoutes);
 app.use("/api/media-cleanup", mediaCleanupRoutes);
 app.use("/api/ai", aiRoutes);
