@@ -10,6 +10,7 @@ import mediaCleanupRoutes from "./routes/mediaCleanup.js";
 import aiRoutes from "./routes/aiRoutes.js";
 import aiToolsRoutes from "./routes/aiTools.js";
 import suggestionsRoutes from "./routes/suggestions.js";
+import voiceRoutes from "./routes/voice.js";
 
 dotenv.config();
 
@@ -52,6 +53,7 @@ app.use("/api/notifications", notificationRoutes);
 app.use("/api/media-cleanup", mediaCleanupRoutes);
 app.use("/api/ai", aiRoutes);
 app.use("/api/ai", aiToolsRoutes);
+app.use("/api/voice", voiceRoutes);
 
 app.get("/", (req, res) => {
   res.status(200).json({
