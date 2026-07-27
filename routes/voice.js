@@ -20,7 +20,7 @@ const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 500 * 1024, // 500 KB max
+    fileSize: 2 * 1024 * 1024, // 2 MB max (60s at 32kbps ≈ 240KB, but allowing headroom)
   },
   fileFilter: (_req, file, cb) => {
     // Only allow audio files
@@ -50,7 +50,7 @@ const upload = multer({
  * Requires:
  * - Firebase auth token (Bearer)
  * - Premium subscription
- * - Audio file (max 500KB)
+ * - Audio file (max 2MB)
  * - conversationId in body
  *
  * Returns: { success, audioUrl, duration, publicId }
@@ -169,7 +169,7 @@ router.post(
       ) {
         return res.status(413).json({
           success: false,
-          error: "Audio file exceeds the 500 KB limit.",
+          error: "Audio file exceeds the 2 MB limit.",
         });
       }
 
