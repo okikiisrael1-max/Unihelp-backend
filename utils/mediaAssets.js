@@ -37,11 +37,34 @@ const assetFromObject = (value) => {
   };
 };
 
+const collectAssetsFromString = (value = "", assets = []) => {
+  if (!value || typeof value !== "string" || !value.includes("res.cloudinary.com")) {
+    return assets;
+  }
+
+  const matches = value.match(/https?:\/\/res\.cloudinary\.com\/[^\s)"']+/g) || [];
+  matches.forEach((url) => {
+    const resourceMatch = url.match(/res\.cloudinary\.com\/[^/]+\/(image|video|raw)\//);
+    assets.push({
+      url,
+      publicId: null,
+      resourceType: resourceMatch?.[1] || "image",
+    });
+  });
+
+  return assets;
+};
+
 export const collectCloudinaryAssets = (value, assets = []) => {
   if (!value) return assets;
 
   if (Array.isArray(value)) {
     value.forEach((item) => collectCloudinaryAssets(item, assets));
+    return assets;
+  }
+
+  if (typeof value === "string") {
+    collectAssetsFromString(value, assets);
     return assets;
   }
 
