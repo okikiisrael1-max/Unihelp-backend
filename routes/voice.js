@@ -11,10 +11,13 @@ const buildVoiceDeletePayload = (messageDoc) => {
   const data = messageDoc?.data?.() || {};
   const publicId = data.cloudinaryPublicId || data.publicId || null;
   const resourceType = data.cloudinaryResourceType || data.resourceType || "video";
+  const fallbackFromUrl = typeof data.audioUrl === "string" && data.audioUrl.includes("res.cloudinary.com")
+    ? data.audioUrl
+    : null;
   return {
     publicId,
     resourceType,
-    url: data.audioUrl || null,
+    url: fallbackFromUrl,
   };
 };
 
@@ -173,6 +176,15 @@ router.delete(
           });
         } catch (cloudinaryError) {
           console.warn("[voice] Cloudinary delete failed:", cloudinaryError);
+        }
+      } else if (deletePayload.url) {
+        try {
+          const parsedPublicId = deletePayload.url.split("/").slice(-1)[0]?.split(".")[0];
+          if (parsedPublicId) {
+            await cloudinary.uploader.destroy(parsedPublicId, { resource_type: deletePayload.resourceType });
+          }
+        } catch (cloudinaryError) {
+          console.warn("[voice] Cloudinary delete from URL failed:", cloudinaryError);
         }
       }
 
